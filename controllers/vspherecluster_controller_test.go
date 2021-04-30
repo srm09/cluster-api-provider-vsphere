@@ -18,6 +18,10 @@ package controllers
 
 import (
 	goctx "context"
+	"sigs.k8s.io/cluster-api/util/conditions"
+
+	//"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/patch"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -26,7 +30,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
-	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/api/v1alpha4"
@@ -65,7 +68,17 @@ var _ = Describe("ClusterReconciler", func() {
 					Name:      "vsphere-test1",
 					Namespace: "default",
 				},
-				Spec: infrav1.VSphereClusterSpec{},
+				Spec: infrav1.VSphereClusterSpec{
+					CloudProviderConfiguration: infrav1.CPIConfig{
+						// To ensure that the CloudProvider config available check passes
+						ProviderConfig: infrav1.CPIProviderConfig{
+							Cloud: &infrav1.CPICloudConfig{
+								ControllerImage: "gcr.io/cloud-provider-vsphere/cpi/release/manager:v1.18.1",
+							},
+						},
+					},
+					//Server: testEnv.VCSimulator.Server.URL.Host,
+				},
 			}
 
 			// Create the VSphereCluster object
@@ -76,12 +89,6 @@ var _ = Describe("ClusterReconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}()
 
-			// Make sure the VSphereCluster exists.
-			Eventually(func() bool {
-				err := testEnv.Get(ctx, key, instance)
-				return err == nil
-			}, timeout).Should(BeTrue())
-
 			By("setting the OwnerRef on the VSphereCluster")
 			Eventually(func() bool {
 				ph, err := patch.NewHelper(instance, testEnv)
@@ -91,11 +98,13 @@ var _ = Describe("ClusterReconciler", func() {
 				return true
 			}, timeout).Should(BeTrue())
 
-			Eventually(func() bool {
+				Eventually(func() bool {
+				// Make sure the VSphereCluster exists.
 				if err := testEnv.Get(ctx, key, instance); err != nil {
 					return false
 				}
-				return len(instance.Finalizers) > 0
+				return len(instance.Finalizers) > 0 &&
+					conditions.IsTrue(instance, infrav1.VCenterAvailableCondition)
 			}, timeout).Should(BeTrue())
 		})
 	})

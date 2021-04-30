@@ -105,6 +105,8 @@ type (
 		manager.Manager
 		client.Client
 		Config *rest.Config
+		// Mock for VC interactions
+		VCSimulator VCSimulator
 
 		cancel goctx.CancelFunc
 	}
@@ -120,16 +122,19 @@ func NewTestEnvironment() *TestEnvironment {
 		panic(err)
 	}
 
+	vcSim, err := InitVCSim()
+	if err != nil {
+		klog.Fatalf("unable to start vc simulator %s", err)
+	}
+
 	managerOpts := manager.Options{
 		Scheme:      scheme,
 		MetricsAddr: "0",
 		WebhookPort: env.WebhookInstallOptions.LocalServingPort,
 		CertDir:     env.WebhookInstallOptions.LocalServingCertDir,
 		KubeConfig:  env.Config,
-		// TODO (srm09): might need to supply some mock for
-		// 		vCenter interactions
-		Username: "blah",
-		Password: "blah2",
+		Username:    vcSim.Username(),
+		Password:    vcSim.Password(),
 	}
 	managerOpts.AddToManager = func(ctx *context.ControllerManagerContext, mgr ctrlmgr.Manager) error {
 		if err := (&infrav1.VSphereCluster{}).SetupWebhookWithManager(mgr); err != nil {
@@ -172,6 +177,7 @@ func NewTestEnvironment() *TestEnvironment {
 		Manager: mgr,
 		Client:  mgr.GetClient(),
 		Config:  mgr.GetConfig(),
+		VCSimulator: vcSim,
 	}
 }
 
@@ -183,6 +189,7 @@ func (t *TestEnvironment) StartManager(ctx goctx.Context) error {
 
 func (t *TestEnvironment) Stop() error {
 	t.cancel()
+	t.VCSimulator.Stop()
 	return env.Stop()
 }
 
