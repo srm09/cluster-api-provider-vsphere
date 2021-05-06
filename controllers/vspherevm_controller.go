@@ -389,7 +389,7 @@ func (r vmReconciler) reconcileNetwork(ctx *context.VMContext, vm infrav1.Virtua
 }
 
 func (r *vmReconciler) clusterToVSphereVMs(a ctrlclient.Object) []reconcile.Request {
-	requests := []reconcile.Request{}
+	var requests []reconcile.Request
 	vms := &infrav1.VSphereVMList{}
 	err := r.Client.List(goctx.Background(), vms, ctrlclient.MatchingLabels(
 		map[string]string{

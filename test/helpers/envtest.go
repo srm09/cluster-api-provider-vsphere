@@ -21,6 +21,9 @@ import (
 	"fmt"
 	"go/build"
 	"io/ioutil"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os"
 	"path"
 	"path/filepath"
@@ -191,6 +194,37 @@ func (t *TestEnvironment) Stop() error {
 	t.cancel()
 	t.VCSimulator.Stop()
 	return env.Stop()
+}
+
+func (t *TestEnvironment) Cleanup(ctx goctx.Context, objs ...client.Object) error {
+	var errs []error
+	for _, o := range objs {
+		err := t.Client.Delete(ctx, o)
+		if apierrors.IsNotFound(err) {
+			// If the object is not found, it must've been garbage collected
+			// already. For example, if we delete namespace first and then
+			// objects within it.
+			continue
+		}
+		errs = append(errs, err)
+	}
+	return kerrors.NewAggregate(errs)
+}
+
+func (t *TestEnvironment) CreateNamespace(ctx goctx.Context, generateName string) (*corev1.Namespace, error) {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: fmt.Sprintf("%s-", generateName),
+			Labels: map[string]string{
+				"testenv/original-name": generateName,
+			},
+		},
+	}
+	if err := t.Client.Create(ctx, ns); err != nil {
+		return nil, err
+	}
+
+	return ns, nil
 }
 
 func getFilePathToCAPICRDs(root string) string {
