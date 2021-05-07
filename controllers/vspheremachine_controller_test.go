@@ -15,7 +15,7 @@ import (
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/api/v1alpha4"
 )
 
-var _ = FDescribe("VsphereMachineReconciler", func() {
+var _ = Describe("VsphereMachineReconciler", func() {
 
 	var (
 		capiCluster *clusterv1.Cluster
@@ -35,17 +35,18 @@ var _ = FDescribe("VsphereMachineReconciler", func() {
 
 		capiCluster = &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test1-cluster",
+				GenerateName: "test1-",
 				Namespace:    testNs.Name,
 			},
 			Spec: clusterv1.ClusterSpec{
 				InfrastructureRef: &corev1.ObjectReference{
 					APIVersion: "infrastructure.cluster.x-k8s.io/v1alpha4",
-					Kind:       "VsphereCluster",
+					Kind:       "VSphereCluster",
 					Name:       "vsphere-test1",
 				},
 			},
 		}
+		Expect(testEnv.Create(ctx, capiCluster)).To(Succeed())
 
 		infraCluster = &infrav1.VSphereCluster{
 			ObjectMeta: metav1.ObjectMeta{
@@ -62,11 +63,11 @@ var _ = FDescribe("VsphereMachineReconciler", func() {
 			},
 			Spec: infrav1.VSphereClusterSpec{},
 		}
+		Expect(testEnv.Create(ctx, infraCluster)).To(Succeed())
 
 		capiMachine = &clusterv1.Machine{
 			ObjectMeta: metav1.ObjectMeta{
-				//GenerateName: "machine-created-",
-				Name: "capi-machine-1",
+				GenerateName: "machine-created-",
 				Namespace:    testNs.Name,
 				Finalizers:   []string{clusterv1.MachineFinalizer},
 				Labels: map[string]string{
@@ -77,24 +78,23 @@ var _ = FDescribe("VsphereMachineReconciler", func() {
 				ClusterName: capiCluster.Name,
 				InfrastructureRef: corev1.ObjectReference{
 					APIVersion: "infrastructure.cluster.x-k8s.io/v1alpha4",
-					Kind:       "VsphereMachine",
+					Kind:       "VSphereMachine",
 					Name:       "vsphere-machine-1",
 				},
 			},
-			Status: clusterv1.MachineStatus{
-				//NodeRef: &corev1.ObjectReference{
-				//	Name: "test",
-				//},
-			},
 		}
+		Expect(testEnv.Create(ctx, capiMachine)).To(Succeed())
 
 		infraMachine = &infrav1.VSphereMachine{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "vsphere-machine-1",
 				Namespace: testNs.Name,
+				Labels: map[string]string{
+					clusterv1.ClusterLabelName: capiCluster.Name,
+				},
 				OwnerReferences: []metav1.OwnerReference{
 					{
-						APIVersion:         "machine.x-k8s.io/v1alpha4",
+						APIVersion:         clusterv1.GroupVersion.String(),
 						Kind:               "Machine",
 						Name:               capiMachine.Name,
 						UID:"blah",
@@ -111,18 +111,17 @@ var _ = FDescribe("VsphereMachineReconciler", func() {
 					},
 				},
 			},
-			Status:     infrav1.VSphereMachineStatus{},
 		}
 
 		vm = &infrav1.VSphereVM{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace: infraMachine.Namespace,
-				Name:      infraMachine.Name,
+				Namespace: testNs.Name,
+				GenerateName: infraMachine.Name,
 				OwnerReferences: []metav1.OwnerReference{
 					{
-						APIVersion:         "infrastructure.cluster.x-k8s.io/v1alpha4",
-						Kind:       "VsphereMachine",
-						Name:               infraMachine.Name,
+						APIVersion:	infrav1.GroupVersion.String(),
+						Kind:       "VSphereMachine",
+						Name:        infraMachine.Name,
 						UID:"blah",
 					},
 				},
@@ -140,31 +139,25 @@ var _ = FDescribe("VsphereMachineReconciler", func() {
 			},
 		}
 
-		Expect(testEnv.Create(ctx, capiCluster)).To(Succeed())
-		Expect(testEnv.Create(ctx, capiMachine)).To(Succeed())
-		Expect(testEnv.Create(ctx, infraCluster)).To(Succeed())
 		Expect(testEnv.Create(ctx, infraMachine)).To(Succeed())
 		Expect(testEnv.Create(ctx, vm)).To(Succeed())
 	})
 
 	AfterEach(func() {
-		defer func(do ...client.Object) {
-			Expect(testEnv.Cleanup(ctx, do...)).To(Succeed())
-		}(capiCluster, testNs)
+		Expect(testEnv.Cleanup(ctx, capiCluster, testNs)).To(Succeed())
 	})
 
-	Context("In case of errors on the VsphereVM", func() {
+	Context("In case of errors on the VSphereVM", func() {
 		It("should surface the errors to the Machine", func() {
 
 			By("setting the failure message and reason on the VM")
-			Eventually(func() bool {
+			Eventually(func() error {
 				ph, err := patch.NewHelper(vm, testEnv)
 				Expect(err).ShouldNot(HaveOccurred())
 				vm.Status.FailureReason = capierrors.MachineStatusErrorPtr(capierrors.UpdateMachineError)
 				vm.Status.FailureMessage = pointer.StringPtr("some failure here")
-				Expect(ph.Patch(ctx, vm, patch.WithStatusObservedGeneration{})).ShouldNot(HaveOccurred())
-				return true
-			}, timeout).Should(BeTrue())
+				return ph.Patch(ctx, vm, patch.WithStatusObservedGeneration{})
+			}, timeout).Should(BeNil())
 
 			Eventually(func() bool {
 				key := client.ObjectKey{Namespace: testNs.Name, Name: infraMachine.Name}

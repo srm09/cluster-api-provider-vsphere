@@ -17,11 +17,7 @@ limitations under the License.
 package controllers
 
 import (
-	goctx "context"
-	"sigs.k8s.io/cluster-api/util/conditions"
-
-	//"sigs.k8s.io/cluster-api/util/conditions"
-	"sigs.k8s.io/cluster-api/util/patch"
+	"context"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -30,22 +26,24 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/api/v1alpha4"
 )
 
 const (
-	timeout = time.Second * 30
+	timeout = time.Second * 5
 )
 
-var _ = Describe("ClusterReconciler", func() {
+var _ = FDescribe("ClusterReconciler", func() {
 	BeforeEach(func() {})
 	AfterEach(func() {})
 
 	Context("Reconcile an VSphereCluster", func() {
 		It("should create a cluster", func() {
-			ctx := goctx.Background()
+			ctx := context.Background()
 
 			capiCluster := &clusterv1.Cluster{
 				ObjectMeta: metav1.ObjectMeta{
@@ -54,14 +52,18 @@ var _ = Describe("ClusterReconciler", func() {
 				},
 				Spec: clusterv1.ClusterSpec{
 					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: "infrastructure.cluster.x-k8s.io/v1alpha4",
-						Kind:       "VsphereCluster",
+						APIVersion: infrav1.GroupVersion.String(),
+						Kind:       "VSphereCluster",
 						Name:       "vsphere-test1",
 					},
 				},
 			}
 			// Create the CAPI cluster (owner) object
 			Expect(testEnv.Create(ctx, capiCluster)).To(Succeed())
+			defer func() {
+				Expect(testEnv.Cleanup(ctx, capiCluster)).To(Succeed())
+			}()
+			Expect(testEnv.CreateKubeconfigSecret(ctx, capiCluster)).To(Succeed())
 
 			instance := &infrav1.VSphereCluster{
 				ObjectMeta: metav1.ObjectMeta{
@@ -76,8 +78,11 @@ var _ = Describe("ClusterReconciler", func() {
 								ControllerImage: "gcr.io/cloud-provider-vsphere/cpi/release/manager:v1.18.1",
 							},
 						},
+						VCenter: map[string]infrav1.CPIVCenterConfig{
+							testEnv.VCSimulator.Server.URL.Host : {},
+						},
 					},
-					//Server: testEnv.VCSimulator.Server.URL.Host,
+					Server: testEnv.VCSimulator.Server.URL.Host,
 				},
 			}
 
@@ -85,27 +90,53 @@ var _ = Describe("ClusterReconciler", func() {
 			Expect(testEnv.Create(ctx, instance)).To(Succeed())
 			key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name}
 			defer func() {
-				err := testEnv.Delete(ctx, instance)
-				Expect(err).NotTo(HaveOccurred())
+				Expect(testEnv.Delete(ctx, instance)).To(Succeed())
 			}()
 
 			By("setting the OwnerRef on the VSphereCluster")
-			Eventually(func() bool {
+			Eventually(func() error {
 				ph, err := patch.NewHelper(instance, testEnv)
 				Expect(err).ShouldNot(HaveOccurred())
-				instance.OwnerReferences = append(instance.OwnerReferences, metav1.OwnerReference{Kind: "Cluster", APIVersion: clusterv1.GroupVersion.String(), Name: capiCluster.Name, UID: "blah"})
-				Expect(ph.Patch(ctx, instance, patch.WithStatusObservedGeneration{})).ShouldNot(HaveOccurred())
-				return true
-			}, timeout).Should(BeTrue())
+				instance.OwnerReferences = append(instance.OwnerReferences, metav1.OwnerReference{
+					Kind: "Cluster",
+					APIVersion: clusterv1.GroupVersion.String(),
+					Name: capiCluster.Name,
+					UID: "blah",
+				})
+				return ph.Patch(ctx, instance, patch.WithStatusObservedGeneration{})
+			}, timeout).Should(BeNil())
 
-				Eventually(func() bool {
+			Eventually(func() bool {
 				// Make sure the VSphereCluster exists.
 				if err := testEnv.Get(ctx, key, instance); err != nil {
 					return false
 				}
 				return len(instance.Finalizers) > 0 &&
-					conditions.IsTrue(instance, infrav1.VCenterAvailableCondition)
+					conditions.IsTrue(instance, infrav1.VCenterAvailableCondition) &&
+					instance.Status.Ready
 			}, timeout).Should(BeTrue())
+
+			By("setting the ControlPlane endpoint on VSphereCluster")
+			Eventually(func() error {
+				ph, err := patch.NewHelper(instance, testEnv)
+				Expect(err).ShouldNot(HaveOccurred())
+				instance.Spec.ControlPlaneEndpoint = infrav1.APIEndpoint{
+					Host: "1.2.3.4", Port: 1234,
+				}
+				return ph.Patch(ctx, instance, patch.WithStatusObservedGeneration{})
+			}, timeout).Should(BeNil())
+
+			Eventually(func() bool {
+				// Make sure the VSphereCluster exists.
+				if err := testEnv.Get(ctx, key, instance); err != nil {
+					return false
+				}
+				return len(instance.Finalizers) > 0 &&
+					conditions.IsTrue(instance, infrav1.VCenterAvailableCondition) &&
+					instance.Status.Ready
+			}, timeout).Should(BeTrue())
+
+			//TODO: reconcileCloudConfigSecret here
 		})
 	})
 })
