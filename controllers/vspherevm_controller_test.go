@@ -54,6 +54,16 @@ func TestReconcileNormal_WaitingForIPAddrAllocation(t *testing.T) {
 		},
 	}
 
+	vsphereMachine := &infrav1.VSphereMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-vm",
+			Namespace: "test",
+			Labels: map[string]string{
+				clusterv1.ClusterLabelName: "valid-cluster",
+			},
+		},
+	}
+
 	vSphereVM := &infrav1.VSphereVM{
 		TypeMeta: metav1.TypeMeta{
 			Kind: "VSphereVM",
@@ -64,6 +74,7 @@ func TestReconcileNormal_WaitingForIPAddrAllocation(t *testing.T) {
 			Labels: map[string]string{
 				clusterv1.ClusterLabelName: "valid-cluster",
 			},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: vsphereMachine.APIVersion, Kind: vsphereMachine.Kind, Name: "foo-vm"}},
 			// To make sure PatchHelper does not error out
 			ResourceVersion: "1234",
 		},
@@ -81,7 +92,7 @@ func TestReconcileNormal_WaitingForIPAddrAllocation(t *testing.T) {
 		Status: infrav1.VSphereVMStatus{},
 	}
 
-	controllerMgrContext := fake.NewControllerManagerContext(vSphereVM, cluster, vsphereCluster)
+	controllerMgrContext := fake.NewControllerManagerContext(vSphereVM, vsphereMachine, cluster, vsphereCluster)
 	password, _ := simr.ServerURL().User.Password()
 	controllerMgrContext.Password = password
 	controllerMgrContext.Username = simr.ServerURL().User.Username()
@@ -156,8 +167,8 @@ func TestVmReconciler_WaitingForStaticIPAllocation(t *testing.T) {
 	vmContext := fake.NewVMContext(controllerCtx)
 	r := vmReconciler{controllerCtx}
 
+	// nolint:scopelint
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			vmContext.VSphereVM.Spec.Network = infrav1.NetworkSpec{Devices: tt.devices}
 			isWaiting := r.isWaitingForStaticIPAllocation(vmContext)
@@ -214,6 +225,16 @@ func TestRetrievingVCenterCredentialsFromCluster(t *testing.T) {
 		},
 	}
 
+	vsphereMachine := &infrav1.VSphereMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-vm",
+			Namespace: "test",
+			Labels: map[string]string{
+				clusterv1.ClusterLabelName: "valid-cluster",
+			},
+		},
+	}
+
 	vSphereVM := &infrav1.VSphereVM{
 		TypeMeta: metav1.TypeMeta{
 			Kind: "VSphereVM",
@@ -224,6 +245,7 @@ func TestRetrievingVCenterCredentialsFromCluster(t *testing.T) {
 			Labels: map[string]string{
 				clusterv1.ClusterLabelName: "valid-cluster",
 			},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: vsphereMachine.APIVersion, Kind: vsphereMachine.Kind, Name: "foo-vm"}},
 			// To make sure PatchHelper does not error out
 			ResourceVersion: "1234",
 		},
@@ -241,7 +263,7 @@ func TestRetrievingVCenterCredentialsFromCluster(t *testing.T) {
 		Status: infrav1.VSphereVMStatus{},
 	}
 
-	controllerMgrContext := fake.NewControllerManagerContext(secret, vSphereVM, cluster, vsphereCluster)
+	controllerMgrContext := fake.NewControllerManagerContext(secret, vSphereVM, vsphereMachine, cluster, vsphereCluster)
 
 	controllerContext := &context.ControllerContext{
 		ControllerManagerContext: controllerMgrContext,
