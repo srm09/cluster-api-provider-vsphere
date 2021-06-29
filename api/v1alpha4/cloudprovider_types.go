@@ -25,6 +25,38 @@ limitations under the License.
 // support reflecting a struct with a field of type "map[string]TYPE" to INI.
 package v1alpha4
 
+// CPIConfig is the vSphere cloud provider's configuration.
+// DEPRECATED: will be removed in v1alpha4
+type CPIConfig struct {
+	// Global is the vSphere cloud provider's global configuration.
+	// +optional
+	Global CPIGlobalConfig `gcfg:"Global,omitempty" json:"global,omitempty"`
+
+	// VCenter is a list of vCenter configurations.
+	// +optional
+	VCenter map[string]CPIVCenterConfig `gcfg:"VirtualCenter,omitempty" json:"virtualCenter,omitempty"`
+
+	// Network is the vSphere cloud provider's network configuration.
+	// +optional
+	Network CPINetworkConfig `gcfg:"Network,omitempty" json:"network,omitempty"`
+
+	// Disk is the vSphere cloud provider's disk configuration.
+	// +optional
+	Disk CPIDiskConfig `gcfg:"Disk,omitempty" json:"disk,omitempty"`
+
+	// Workspace is the vSphere cloud provider's workspace configuration.
+	// +optional
+	Workspace CPIWorkspaceConfig `gcfg:"Workspace,omitempty" json:"workspace,omitempty"`
+
+	// Labels is the vSphere cloud provider's zone and region configuration.
+	// +optional
+	Labels CPILabelConfig `gcfg:"Labels,omitempty" json:"labels,omitempty"`
+
+	// CPIProviderConfig contains extra information used to configure the
+	// vSphere cloud provider.
+	ProviderConfig CPIProviderConfig `json:"providerConfig,omitempty"`
+}
+
 // CPIProviderConfig defines any extra information used to configure
 // the vSphere external cloud provider
 type CPIProviderConfig struct {

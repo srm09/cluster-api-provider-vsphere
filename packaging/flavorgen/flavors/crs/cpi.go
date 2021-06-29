@@ -47,18 +47,6 @@ func CreateCrsResourceObjectsCPI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 	}
 	cpiObjects = append(cpiObjects, clusterRoleBinding)
 
-	/*cloudConfig, err := CPIConfigString()
-	if err != nil {
-		panic(errors.Errorf("invalid cloudConfig"))
-	}
-	// cloud config secret is wrapped in another secret so it could be injected via CRS
-	cloudConfigConfigMap := cloudprovidersvc.CloudControllerManagerConfigMap(cloudConfig)
-	cloudConfigConfigMap.TypeMeta = v1.TypeMeta{
-		Kind:       "ConfigMap",
-		APIVersion: corev1.SchemeGroupVersion.String(),
-	}
-	cpiObjects = append(cpiObjects, cloudConfigConfigMap)*/
-
 	roleBinding := cloudprovider.CloudControllerManagerRoleBinding()
 	roleBinding.TypeMeta = v1.TypeMeta{
 		Kind:       "RoleBinding",
@@ -95,17 +83,6 @@ func CreateCrsResourceObjectsCPI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 		manifestsCm,
 	}
 }
-
-/*func CPIConfigString() (string, error) {
-	cpiConfig := newCPIConfig()
-
-	cpiConfigString, err := cpiConfig.MarshalINI()
-	if err != nil {
-		return "", err
-	}
-
-	return string(cpiConfigString), nil
-}*/
 
 func cpiCredentials(credentials map[string]string) *corev1.Secret {
 	return &corev1.Secret{

@@ -7,6 +7,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/api/v1alpha4"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/cloudprovider"
 	addonsv1alpha4 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
@@ -38,19 +39,6 @@ func CreateCrsResourceObjectsCSI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 	clusterRoleBindingConfigMap := newConfigMap(clusterRoleBinding.Name, clusterRoleBinding)
 	appendConfigMapToCrsResource(crs, clusterRoleBindingConfigMap)
 
-	/*cloudConfig, err := ConfigForCSI().MarshalINI()
-	if err != nil {
-		panic(errors.Errorf("invalid cloudConfig"))
-	}
-	// cloud config secret is wrapped in another secret so it could be injected via CRS
-	cloudConfigSecret := cloudprovider.CSICloudConfigSecret(string(cloudConfig))
-	cloudConfigSecret.TypeMeta = metav1.TypeMeta{
-		Kind:       "Secret",
-		APIVersion: corev1.SchemeGroupVersion.String(),
-	}
-	cloudConfigSecretWrapper := newSecret(cloudConfigSecret.Name, cloudConfigSecret)
-	appendSecretToCrsResource(crs, cloudConfigSecretWrapper)*/
-
 	csiDriver := cloudprovider.CSIDriver()
 	csiDriver.TypeMeta = metav1.TypeMeta{
 		Kind:       "CSIDriver",
@@ -80,7 +68,6 @@ func CreateCrsResourceObjectsCSI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 		serviceAccountSecret,
 		clusterRoleConfigMap,
 		clusterRoleBindingConfigMap,
-		//cloudConfigSecretWrapper,
 		csiDriverConfigMap,
 		daemonSetConfigMap,
 		deploymentConfigMap,
@@ -99,22 +86,3 @@ func createStorageConfig() *infrav1.CPIStorageConfig {
 		RegistrarImage:      cloudprovider.DefaultCSIRegistrarImage,
 	}
 }
-
-/*// ConfigForCSI returns a cloudprovider.CPIConfig specific to the vSphere CSI driver until
-// it supports using Secrets for vCenter credentials
-func ConfigForCSI() *infrav1.CPIConfig {
-	config := &infrav1.CPIConfig{}
-
-	config.Global.ClusterID = fmt.Sprintf("%s/%s", env.NamespaceVar, env.ClusterNameVar)
-	config.Network.Name = env.VSphereNetworkVar
-
-	config.VCenter = map[string]infrav1.CPIVCenterConfig{
-		env.VSphereServerVar: {
-			Username:    env.VSphereUsername,
-			Password:    env.VSpherePassword,
-			Datacenters: env.VSphereDataCenterVar,
-		},
-	}
-
-	return config
-}*/
