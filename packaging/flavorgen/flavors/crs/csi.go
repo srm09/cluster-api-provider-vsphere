@@ -1,10 +1,6 @@
 package crs
 
 import (
-	"fmt"
-
-	"github.com/pkg/errors"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbac "k8s.io/api/rbac/v1"
@@ -12,7 +8,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/api/v1alpha4"
-	"sigs.k8s.io/cluster-api-provider-vsphere/packaging/flavorgen/flavors/env"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/cloudprovider"
 	addonsv1alpha4 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
 )
@@ -43,7 +38,7 @@ func CreateCrsResourceObjectsCSI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 	clusterRoleBindingConfigMap := newConfigMap(clusterRoleBinding.Name, clusterRoleBinding)
 	appendConfigMapToCrsResource(crs, clusterRoleBindingConfigMap)
 
-	cloudConfig, err := ConfigForCSI().MarshalINI()
+	/*cloudConfig, err := ConfigForCSI().MarshalINI()
 	if err != nil {
 		panic(errors.Errorf("invalid cloudConfig"))
 	}
@@ -54,7 +49,7 @@ func CreateCrsResourceObjectsCSI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 		APIVersion: corev1.SchemeGroupVersion.String(),
 	}
 	cloudConfigSecretWrapper := newSecret(cloudConfigSecret.Name, cloudConfigSecret)
-	appendSecretToCrsResource(crs, cloudConfigSecretWrapper)
+	appendSecretToCrsResource(crs, cloudConfigSecretWrapper)*/
 
 	csiDriver := cloudprovider.CSIDriver()
 	csiDriver.TypeMeta = metav1.TypeMeta{
@@ -85,7 +80,7 @@ func CreateCrsResourceObjectsCSI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 		serviceAccountSecret,
 		clusterRoleConfigMap,
 		clusterRoleBindingConfigMap,
-		cloudConfigSecretWrapper,
+		//cloudConfigSecretWrapper,
 		csiDriverConfigMap,
 		daemonSetConfigMap,
 		deploymentConfigMap,
@@ -105,7 +100,7 @@ func createStorageConfig() *infrav1.CPIStorageConfig {
 	}
 }
 
-// ConfigForCSI returns a cloudprovider.CPIConfig specific to the vSphere CSI driver until
+/*// ConfigForCSI returns a cloudprovider.CPIConfig specific to the vSphere CSI driver until
 // it supports using Secrets for vCenter credentials
 func ConfigForCSI() *infrav1.CPIConfig {
 	config := &infrav1.CPIConfig{}
@@ -122,4 +117,4 @@ func ConfigForCSI() *infrav1.CPIConfig {
 	}
 
 	return config
-}
+}*/

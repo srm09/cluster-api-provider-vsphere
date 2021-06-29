@@ -3,8 +3,6 @@ package crs
 import (
 	"fmt"
 
-	"github.com/pkg/errors"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbac "k8s.io/api/rbac/v1"
@@ -49,7 +47,7 @@ func CreateCrsResourceObjectsCPI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 	}
 	cpiObjects = append(cpiObjects, clusterRoleBinding)
 
-	cloudConfig, err := CPIConfigString()
+	/*cloudConfig, err := CPIConfigString()
 	if err != nil {
 		panic(errors.Errorf("invalid cloudConfig"))
 	}
@@ -59,7 +57,7 @@ func CreateCrsResourceObjectsCPI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 		Kind:       "ConfigMap",
 		APIVersion: corev1.SchemeGroupVersion.String(),
 	}
-	cpiObjects = append(cpiObjects, cloudConfigConfigMap)
+	cpiObjects = append(cpiObjects, cloudConfigConfigMap)*/
 
 	roleBinding := cloudprovider.CloudControllerManagerRoleBinding()
 	roleBinding.TypeMeta = v1.TypeMeta{
@@ -98,7 +96,7 @@ func CreateCrsResourceObjectsCPI(crs *addonsv1alpha4.ClusterResourceSet) []runti
 	}
 }
 
-func CPIConfigString() (string, error) {
+/*func CPIConfigString() (string, error) {
 	cpiConfig := newCPIConfig()
 
 	cpiConfigString, err := cpiConfig.MarshalINI()
@@ -107,7 +105,7 @@ func CPIConfigString() (string, error) {
 	}
 
 	return string(cpiConfigString), nil
-}
+}*/
 
 func cpiCredentials(credentials map[string]string) *corev1.Secret {
 	return &corev1.Secret{
