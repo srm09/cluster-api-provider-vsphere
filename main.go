@@ -184,9 +184,6 @@ func main() {
 		if err := controllers.AddVMControllerToManager(ctx, mgr); err != nil {
 			return err
 		}
-		if err := controllers.AddHAProxyLoadBalancerControllerToManager(ctx, mgr); err != nil {
-			return err
-		}
 		if err := controllers.AddVsphereClusterIdentityControllerToManager(ctx, mgr); err != nil {
 			return err
 		}
