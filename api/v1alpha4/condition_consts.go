@@ -124,3 +124,56 @@ const (
 	// SecretAlreadyInUseReason is used when another VSphereClusterIdentity is using the secret
 	SecretAlreadyInUseReason = "SecretInUse"
 )
+
+const (
+	// VCenterConnectedCondition documents the connectivity with vCenter
+	// for a given VSphereDeploymentZone
+	VCenterConnectedCondition clusterv1.ConditionType = "VCenterConnected"
+
+	// VCenterUnavailableReason (Severity=Error) documents a VSphereDeploymentZone controller detecting
+	// issues with VCenter reachability
+	VCenterUnavailableReason = "VCenterUnavailable"
+
+	// PlacementConstraintConfigurationCondition documents whether the placement constraint is configured correctly or not.
+	PlacementConstraintConfigurationCondition clusterv1.ConditionType = "PlacementConstraintConfiguration"
+
+	// ResourcePoolMisconfiguredReason (Severity=Error) documents that the resource pool in the placement constraint
+	// associated to the VSphereDeploymentZone is misconfigured.
+	ResourcePoolMisconfiguredReason = "ResourcePoolMisconfigured"
+
+	// FolderMisconfiguredReason (Severity=Error) documents that the folder in the placement constraint
+	// associated to the VSphereDeploymentZone is misconfigured.
+	FolderMisconfiguredReason = "FolderMisconfigured"
+)
+
+const (
+	// VSphereFailureDomainConfigurationCondition documents whether the failure domain for the deployment zone is configured correctly or not.
+	VSphereFailureDomainConfigurationCondition clusterv1.ConditionType = "VSphereFailureDomainConfigured"
+
+	// RegionMisconfiguredReason (Severity=Error) documents that the region for the Failure Domain associated to
+	// the VSphereDeploymentZone is misconfigured.
+	RegionMisconfiguredReason = "FailureDomainRegionMisconfigured"
+
+	// ZoneMisconfiguredReason (Severity=Error) documents that the zone for the Failure Domain associated to
+	// the VSphereDeploymentZone is misconfigured.
+	ZoneMisconfiguredReason = "FailureDomainZoneMisconfigured"
+
+	// ComputeClusterMisconfiguredReason (Severity=Error) documents that the Compute Cluster details for the Failure Domain
+	// associated to the VSphereDeploymentZone is misconfigured.
+	ComputeClusterMisconfiguredReason = "ComputeClusterMisconfigured"
+
+	// HostsMisconfiguredReason (Severity=Error) documents that the VM & Host Group details for the Failure Domain
+	// associated to the VSphereDeploymentZone are misconfigured.
+	HostsMisconfiguredReason = "HostsMisconfigured"
+
+	// HostsAffinityMisconfiguredReason (Severity=Warning) documents that the VM & Host Group affinity rule for the FailureDomain is disabled.
+	HostsAffinityMisconfiguredReason = "HostsAffinityMisconfigured"
+
+	// NetworkMisconfiguredReason (Severity=Error) documents that the networks in the topology for the Failure Domain
+	// associated to the VSphereDeploymentZone are misconfigured.
+	NetworkMisconfiguredReason = "NetworksMisconfigured"
+
+	// DatastoreMisconfiguredReason (Severity=Error) documents that the datastore in the topology for the Failure Domain
+	// associated to the VSphereDeploymentZone is misconfigured.
+	DatastoreMisconfiguredReason = "DatastoreMisconfigured"
+)
