@@ -150,48 +150,13 @@ func (r vmReconciler) Reconcile(ctx goctx.Context, req ctrl.Request) (_ ctrl.Res
 	}
 	conditions.MarkTrue(vsphereVM, infrav1.VCenterAvailableCondition)
 
-	// Fetch the owner VSphereMachine.
-	vsphereMachine, err := util.GetOwnerVSphereMachine(r, r.Client, vsphereVM.ObjectMeta)
-	// vsphereMachine can be nil in cases where custom mover other than clusterctl
-	// moves the resources without ownerreferences set
-	// in that case nil vsphereMachine can cause panic and CrashLoopBackOff the pod
-	// preventing vspheremachine_controller from setting the ownerref
-	if err != nil || vsphereMachine == nil {
-		r.Logger.Info("Owner VSphereMachine not found, won't reconcile", "key", req.NamespacedName)
-		return reconcile.Result{}, nil
-	}
-
-	// Fetch the CAPI Machine.
-	machine, err := clusterutilv1.GetOwnerMachine(r, r.Client, vsphereMachine.ObjectMeta)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if machine == nil {
-		r.Logger.Info("Waiting for OwnerRef to be set on VSphereMachine", "key", vsphereMachine.Name)
-		return reconcile.Result{}, nil
-	}
-
-	var vsphereFailureDomain *infrav1.VSphereFailureDomain
-	if failureDomain := machine.Spec.FailureDomain; failureDomain != nil {
-		vsphereDeploymentZone := &infrav1.VSphereDeploymentZone{}
-		if err := r.Client.Get(r, apitypes.NamespacedName{Name: *failureDomain}, vsphereDeploymentZone); err != nil {
-			return reconcile.Result{}, errors.Wrapf(err, "failed to find vsphere deployment zone %s", *failureDomain)
-		}
-
-		vsphereFailureDomain = &infrav1.VSphereFailureDomain{}
-		if err := r.Client.Get(r, apitypes.NamespacedName{Name: vsphereDeploymentZone.Spec.FailureDomain}, vsphereFailureDomain); err != nil {
-			return reconcile.Result{}, errors.Wrapf(err, "failed to find vsphere failure domain %s", vsphereDeploymentZone.Spec.FailureDomain)
-		}
-	}
-
 	// Create the VM context for this request.
 	vmContext := &context.VMContext{
-		ControllerContext:    r.ControllerContext,
-		VSphereVM:            vsphereVM,
-		VSphereFailureDomain: vsphereFailureDomain,
-		Session:              authSession,
-		Logger:               r.Logger.WithName(req.Namespace).WithName(req.Name),
-		PatchHelper:          patchHelper,
+		ControllerContext: r.ControllerContext,
+		VSphereVM:         vsphereVM,
+		Session:           authSession,
+		Logger:            r.Logger.WithName(req.Namespace).WithName(req.Name),
+		PatchHelper:       patchHelper,
 	}
 
 	// Print the task-ref upon entry and upon exit.
@@ -274,6 +239,18 @@ func (r vmReconciler) reconcileNormal(ctx *context.VMContext) (reconcile.Result,
 	}
 	// If the VSphereVM doesn't have our finalizer, add it.
 	ctrlutil.AddFinalizer(ctx.VSphereVM, infrav1.VMFinalizer)
+
+	machine, err := r.fetchOwnerMachine(ctx.VSphereVM)
+	if err != nil {
+		r.Logger.Error(err, "unable to find owner CAPI machine")
+		return reconcile.Result{}, err
+	}
+
+	err = r.lookupFailureDomain(ctx, machine)
+	if err != nil {
+		r.Logger.Error(err, "unable to fetch failure domain")
+		return reconcile.Result{}, err
+	}
 
 	// TODO(akutz) Implement selection of VM service based on vSphere version
 	var vmService services.VirtualMachineService = &govmomi.VMService{}
@@ -375,7 +352,6 @@ func (r *vmReconciler) clusterToVSphereVMs(a ctrlclient.Object) []reconcile.Requ
 
 func (r *vmReconciler) retrieveVcenterSession(ctx goctx.Context, vsphereVM *infrav1.VSphereVM) (*session.Session, error) {
 	// Get cluster object and then get VSphereCluster object
-
 	params := session.NewParams().
 		WithServer(vsphereVM.Spec.Server).
 		WithDatacenter(vsphereVM.Spec.Datacenter).
@@ -416,4 +392,43 @@ func (r *vmReconciler) retrieveVcenterSession(ctx goctx.Context, vsphereVM *infr
 	// Fallback to using credentials provided to the manager
 	return session.GetOrCreate(r.Context,
 		params)
+}
+
+// fetchOwnerMachine traces the owner references of the VSphereVM object to find the CAPI Machine
+// object that owns the parent VSphereMachine object for the VSphereVM object.
+func (r *vmReconciler) fetchOwnerMachine(vsphereVM *infrav1.VSphereVM) (*clusterv1.Machine, error) {
+	vsphereMachine, err := util.GetOwnerVSphereMachine(r, r.Client, vsphereVM.ObjectMeta)
+	// vsphereMachine can be nil in cases where custom mover other than clusterctl
+	// moves the resources without owner references set
+	if err != nil || vsphereMachine == nil {
+		return nil, errors.New("Owner VSphereMachine not found, won't reconcile")
+	}
+
+	// Fetch the CAPI Machine.
+	machine, err := clusterutilv1.GetOwnerMachine(r, r.Client, vsphereMachine.ObjectMeta)
+	if err != nil {
+		return nil, err
+	}
+	if machine == nil {
+		return nil, errors.New("Waiting for OwnerRef to be set on VSphereMachine")
+	}
+	return machine, nil
+}
+
+// lookupFailureDomain populates the VMContext with the VSphereFailureDomain object using the name of
+// the failure domain set on the Machine.
+func (r *vmReconciler) lookupFailureDomain(ctx *context.VMContext, machine *clusterv1.Machine) error {
+	if failureDomain := machine.Spec.FailureDomain; failureDomain != nil {
+		vsphereDeploymentZone := &infrav1.VSphereDeploymentZone{}
+		if err := r.Client.Get(r, apitypes.NamespacedName{Name: *failureDomain}, vsphereDeploymentZone); err != nil {
+			return errors.Wrapf(err, "failed to find vsphere deployment zone %s", *failureDomain)
+		}
+
+		vsphereFailureDomain := &infrav1.VSphereFailureDomain{}
+		if err := r.Client.Get(r, apitypes.NamespacedName{Name: vsphereDeploymentZone.Spec.FailureDomain}, vsphereFailureDomain); err != nil {
+			return errors.Wrapf(err, "failed to find vsphere failure domain %s", vsphereDeploymentZone.Spec.FailureDomain)
+		}
+		ctx.VSphereFailureDomain = vsphereFailureDomain
+	}
+	return nil
 }
