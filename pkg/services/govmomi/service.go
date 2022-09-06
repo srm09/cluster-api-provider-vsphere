@@ -25,6 +25,7 @@ import (
 	"github.com/vmware/govmomi/pbm"
 	pbmTypes "github.com/vmware/govmomi/pbm/types"
 	"github.com/vmware/govmomi/property"
+	vapi "github.com/vmware/govmomi/vapi/cluster"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 	corev1 "k8s.io/api/core/v1"
@@ -119,6 +120,13 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 	}
 
 	vms.reconcileUUID(vmCtx)
+
+	if module := ctx.VSphereVM.Spec.ClusterModuleID; module != "" {
+		_, err := addToClusterModule(ctx)
+		if err != nil {
+			return vm, err
+		}
+	}
 
 	if err := vms.reconcileNetworkStatus(vmCtx); err != nil {
 		return vm, err
@@ -535,4 +543,47 @@ func (vms *VMService) reconcileTags(ctx *virtualMachineContext) error {
 	}
 
 	return nil
+}
+
+func addToClusterModule(ctx *context.VMContext) (bool, error) {
+	//module := "52fa7c2d-f82f-e4f8-a06a-2d0bbf79d2a4"
+	module := ctx.VSphereVM.Spec.ClusterModuleID
+	ctx.Logger.Info("adding to cluster module with module ID: ", module)
+	//if module := ctx.VSphereVM.Spec.ClusterModuleID; module != "" {
+	vmRef, err := findVM(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	isMember, err := isMoRefModuleMember(ctx, module, vmRef)
+	if err != nil {
+		return false, err
+	}
+
+	if !isMember {
+		manager := vapi.NewManager(ctx.Session.TagManager.Client)
+		added, err := manager.AddModuleMembers(ctx, module, []mo.Reference{vmRef}...)
+		if !added {
+			return added, errors.Wrapf(err, "unable to add to cluster module")
+		}
+		return true, nil
+	}
+	//}
+	return false, nil
+}
+
+func isMoRefModuleMember(ctx *context.VMContext, moduleID string, moRef types.ManagedObjectReference) (bool, error) {
+	manager := vapi.NewManager(ctx.Session.TagManager.Client)
+	moduleMembers, err := manager.ListModuleMembers(ctx, moduleID)
+	if err != nil {
+		return false, err
+	}
+
+	for _, member := range moduleMembers {
+		if member.Reference() == moRef.Reference() {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

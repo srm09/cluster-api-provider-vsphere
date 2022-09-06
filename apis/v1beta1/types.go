@@ -154,6 +154,8 @@ type VirtualMachineCloneSpec struct {
 	// PciDevices is the list of pci devices used by the virtual machine.
 	// +optional
 	PciDevices []PCIDeviceSpec `json:"pciDevices,omitempty"`
+	// +optional
+	ClusterModuleID string `json:"clusterModuleID,omitempty"`
 }
 
 // VSphereMachineTemplateResource describes the data needed to create a VSphereMachine from a template

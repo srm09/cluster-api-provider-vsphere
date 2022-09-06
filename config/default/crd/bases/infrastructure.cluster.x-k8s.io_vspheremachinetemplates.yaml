@@ -748,6 +748,8 @@ spec:
                           but fails gracefully to FullClone if the source of the clone
                           operation has no snapshots.
                         type: string
+                      clusterModuleID:
+                        type: string
                       customVMXKeys:
                         additionalProperties:
                           type: string
