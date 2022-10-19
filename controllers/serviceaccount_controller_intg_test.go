@@ -69,13 +69,13 @@ var _ = Describe("ProviderServiceAccount controller integration tests", func() {
 		})
 
 		Context("When serviceaccount secret is created", func() {
-			BeforeEach(func() {
+			/*BeforeEach(func() {
 				// Note: Envtest doesn't run controller-manager, hence, the token controller. The token controller is required
 				// to create a secret containing the bearer token, cert etc for a service account. We need to
 				// simulate the job of the token controller by waiting for the service account creation and then updating it
 				// with a prototype secret.
 				assertServiceAccountAndUpdateSecret(intCtx, intCtx.Client, intCtx.Namespace, pSvcAccount.GetName())
-			})
+			})*/
 
 			It("should create the role and role binding", func() {
 				Eventually(func() error {
