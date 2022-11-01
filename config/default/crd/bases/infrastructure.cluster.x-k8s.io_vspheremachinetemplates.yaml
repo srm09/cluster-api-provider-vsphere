@@ -1001,6 +1001,13 @@ spec:
                           TLS certificate validation of the communication between
                           Cluster API Provider vSphere and the VMware vCenter server.
                         type: string
+                      vmxVersion:
+                        description: VMXVersion is the hardware version of the virtual
+                          machine. Defaults to the eponymous property value in the
+                          template from which the virtual machine is cloned. Check
+                          the compatibility with the ESXi version before setting the
+                          value.
+                        type: string
                     required:
                     - network
                     - template

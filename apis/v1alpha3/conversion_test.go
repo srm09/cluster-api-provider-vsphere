@@ -124,6 +124,7 @@ func CustomSpecNewFieldFuzzer(in *nextver.VirtualMachineCloneSpec, c fuzz.Contin
 	in.PciDevices = nil
 	in.AdditionalDisksGiB = nil
 	in.OS = ""
+	in.VMXVersion = ""
 }
 
 func CustomStatusNewFieldFuzzer(in *nextver.VSphereVMStatus, c fuzz.Continue) {
