@@ -17,7 +17,7 @@ require (
 	github.com/vmware-tanzu/vm-operator-api v0.1.4-0.20211029224930-6ec913d11bff
 	github.com/vmware-tanzu/vm-operator/external/ncp v0.0.0-20211209213435-0f4ab286f64f
 	github.com/vmware-tanzu/vm-operator/external/tanzu-topology v0.0.0-20211209213435-0f4ab286f64f
-	github.com/vmware/govmomi v0.27.1
+	github.com/vmware/govmomi v0.29.0
 	golang.org/x/crypto v0.0.0-20220817201139-bc19a97f63c8
 	golang.org/x/mod v0.6.0-dev.0.20220106191415-9b9b3d81d5e3
 	golang.org/x/oauth2 v0.0.0-20220822191816-0ebed06d0094
@@ -31,7 +31,7 @@ require (
 	k8s.io/klog/v2 v2.70.1
 	k8s.io/utils v0.0.0-20220812165043-ad590609e2e5
 	sigs.k8s.io/cluster-api v1.2.2
-	sigs.k8s.io/cluster-api/test v1.2.2
+	sigs.k8s.io/cluster-api/test v1.2.6
 	sigs.k8s.io/controller-runtime v0.12.3
 	sigs.k8s.io/kind v0.14.0
 	sigs.k8s.io/yaml v1.3.0
@@ -121,7 +121,7 @@ require (
 	github.com/stoewer/go-strcase v1.2.0 // indirect
 	github.com/subosito/gotenv v1.3.0 // indirect
 	github.com/valyala/fastjson v1.6.3 // indirect
-	golang.org/x/net v0.0.0-20220812174116-3211cb980234 // indirect
+	golang.org/x/net v0.0.0-20220906165146-f3363e06e74c // indirect
 	golang.org/x/sys v0.0.0-20220818161305-2296e01440c6 // indirect
 	golang.org/x/term v0.0.0-20220722155259-a9ba230a4035 // indirect
 	golang.org/x/text v0.3.7
