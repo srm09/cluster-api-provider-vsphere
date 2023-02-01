@@ -20,7 +20,7 @@ updates:
   # Ignore k8s modules as they are upgraded manually
   # together with controller-runtime and CAPI dependencies.
   - dependency-name: "k8s.io/*"
-  - dependency-name: "sigs.k8s.io/*"
+  - dependency-name: "sigs.k8s.io/cluster-api*"
   commit-message:
     prefix: ":seedling:"
   labels:
