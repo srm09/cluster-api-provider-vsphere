@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/vmware/govmomi/object"
@@ -46,11 +47,24 @@ import (
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/clustermodules"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/extra"
 	govmominet "sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/net"
+	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/pci"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/util"
 )
 
 // VMService provdes API to interact with the VMs using govmomi.
 type VMService struct{}
+
+// ipamDeviceConfig aids and holds state for the process of parsing IPAM
+// addresses for a given device.
+type ipamDeviceConfig struct {
+	DeviceIndex         int
+	IPAMAddresses       []*ipamv1.IPAddress
+	MACAddress          string
+	NetworkSpecGateway4 string
+	IPAMConfigGateway4  string
+	NetworkSpecGateway6 string
+	IPAMConfigGateway6  string
+}
 
 // ReconcileVM makes sure that the VM is in the desired state by:
 //  1. Creating the VM if it does not exist, then...
@@ -75,6 +89,10 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 	// there is no task for the VSphereVM resource then no reconcile
 	// event is triggered.
 	defer reconcileVSphereVMOnTaskCompletion(ctx)
+
+	if ok, err := vms.reconcileIPAddressClaims(ctx); err != nil || !ok {
+		return vm, err
+	}
 
 	// Before going further, we need the VM's managed object reference.
 	vmRef, err := findVM(ctx)
@@ -109,6 +127,7 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 		err = createVM(ctx, bootstrapData, format)
 		if err != nil {
 			conditions.MarkFalse(ctx.VSphereVM, infrav1.VMProvisionedCondition, infrav1.CloningFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
+			return vm, err
 		}
 		return vm, nil
 	}
@@ -127,15 +146,15 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 
 	vms.reconcileUUID(vmCtx)
 
-	if err := vms.reconcileHardwareVersion(vmCtx); err != nil {
+	if ok, err := vms.reconcileHardwareVersion(vmCtx); err != nil || !ok {
+		return vm, err
+	}
+
+	if err := vms.reconcilePCIDevices(vmCtx); err != nil {
 		return vm, err
 	}
 
 	if err := vms.reconcileNetworkStatus(vmCtx); err != nil {
-		return vm, err
-	}
-
-	if ok, err := vms.reconcileIPAddressClaims(vmCtx); err != nil || !ok {
 		return vm, err
 	}
 
@@ -270,42 +289,16 @@ func (vms *VMService) reconcileNetworkStatus(ctx *virtualMachineContext) error {
 
 // reconcileIPAddressClaims ensures that VSphereVMs that are configured with
 // .spec.network.devices.addressFromPools have corresponding IPAddressClaims.
-func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool, error) {
+func (vms *VMService) reconcileIPAddressClaims(ctx *context.VMContext) (bool, error) {
 	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
 		for poolRefIdx, poolRef := range device.AddressesFromPools {
-			// check if claim exists
-			ipAddrClaim := &ipamv1.IPAddressClaim{}
 			ipAddrClaimName := IPAddressClaimName(ctx.VSphereVM.Name, devIdx, poolRefIdx)
-			ipAddrClaimKey := apitypes.NamespacedName{
-				Namespace: ctx.VSphereVM.Namespace,
-				Name:      ipAddrClaimName,
-			}
-			var err error
-			if err = ctx.Client.Get(ctx, ipAddrClaimKey, ipAddrClaim); err != nil && !apierrors.IsNotFound(err) {
-				return false, err
-			}
+			_, err := getIPAddrClaim(ctx, ipAddrClaimName)
 			if err == nil {
 				ctx.Logger.V(5).Info("IPAddressClaim found", "name", ipAddrClaimName)
 			}
 			if apierrors.IsNotFound(err) {
-				ctx.Logger.Info("creating IPAddressClaim", "name", ipAddrClaimName)
-				claim := &ipamv1.IPAddressClaim{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      ipAddrClaimName,
-						Namespace: ctx.VSphereVM.Namespace,
-						OwnerReferences: []metav1.OwnerReference{
-							{
-								APIVersion: ctx.VSphereVM.APIVersion,
-								Kind:       ctx.VSphereVM.Kind,
-								Name:       ctx.VSphereVM.Name,
-								UID:        ctx.VSphereVM.UID,
-							},
-						},
-						Finalizers: []string{infrav1.IPAddressClaimFinalizer},
-					},
-					Spec: ipamv1.IPAddressClaimSpec{PoolRef: poolRef},
-				}
-				if err = ctx.Client.Create(ctx, claim); err != nil {
+				if err = createIPAddressClaim(ctx, ipAddrClaimName, poolRef); err != nil {
 					return false, err
 				}
 				msg := "Waiting for IPAddressClaim to have an IPAddress bound"
@@ -316,6 +309,29 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 	return true, nil
 }
 
+// createIPAddressClaim sets up the ipam IPAddressClaim object and creates it in
+// the API.
+func createIPAddressClaim(ctx *context.VMContext, ipAddrClaimName string, poolRef corev1.TypedLocalObjectReference) error {
+	ctx.Logger.Info("creating IPAddressClaim", "name", ipAddrClaimName)
+	claim := &ipamv1.IPAddressClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ipAddrClaimName,
+			Namespace: ctx.VSphereVM.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: ctx.VSphereVM.APIVersion,
+					Kind:       ctx.VSphereVM.Kind,
+					Name:       ctx.VSphereVM.Name,
+					UID:        ctx.VSphereVM.UID,
+				},
+			},
+			Finalizers: []string{infrav1.IPAddressClaimFinalizer},
+		},
+		Spec: ipamv1.IPAddressClaimSpec{PoolRef: poolRef},
+	}
+	return ctx.Client.Create(ctx, claim)
+}
+
 // reconcileIPAddresses prevents successful reconcilliation of a VSphereVM
 // until an IPAM Provider updates each IPAddressClaim associated to the
 // VSphereVM with a reference to an IPAddress. This function is a no-op if the
@@ -323,115 +339,67 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 // expected to contain a valid IP, Prefix and Gateway.
 func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, error) {
 	ctx.IPAMState = map[string]infrav1.NetworkDeviceSpec{}
-	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
-		var ipAddrs []string
-		var gateway4 string
-		var gateway6 string
 
-		//TODO: Break this up into smaller functions
-		for poolRefIdx := range device.AddressesFromPools {
-			// check if claim exists
-			ipAddrClaim := &ipamv1.IPAddressClaim{}
-			ipAddrClaimName := IPAddressClaimName(ctx.VSphereVM.Name, devIdx, poolRefIdx)
-			ipAddrClaimKey := apitypes.NamespacedName{
-				Namespace: ctx.VSphereVM.Namespace,
-				Name:      ipAddrClaimName,
-			}
-			var err error
-			ctx.Logger.V(5).Info("fetching IPAddressClaim", "name", ipAddrClaimKey.String())
-			if err = ctx.Client.Get(ctx, ipAddrClaimKey, ipAddrClaim); err != nil && !apierrors.IsNotFound(err) {
-				ctx.Logger.Error(err, "error fetching IPAddressClaim", "name", ipAddrClaimName)
-				return false, err
-			}
+	ipamDeviceConfigs, err := buildIPAMDeviceConfigs(ctx)
+	if err != nil {
+		return false, err
+	}
 
-			ipAddrName := ipAddrClaim.Status.AddressRef.Name
-			ctx.Logger.V(5).Info("fetched IPAddressClaim", "name", ipAddrClaimName, "IPAddressClaim.Status.AddressRef.Name", ipAddrName)
-			if ipAddrName == "" {
-				ctx.Logger.V(5).Info("IPAddress name was empty on IPAddressClaim", "name", ipAddrClaimName, "IPAddressClaim.Status.AddressRef.Name", ipAddrName)
-				msg := "Waiting for IPAddressClaim to have an IPAddress bound"
-				markIPAddressClaimedConditionWaitingForClaimAddress(ctx.VSphereVM, msg)
-				return false, errors.New(msg)
-			}
-
-			ipAddr := &ipamv1.IPAddress{}
-			ipAddrKey := apitypes.NamespacedName{
-				Namespace: ctx.VSphereVM.Namespace,
-				Name:      ipAddrName,
-			}
-			if err = ctx.Client.Get(ctx, ipAddrKey, ipAddr); err != nil {
-				return false, err
-			}
-
-			toAdd := fmt.Sprintf("%s/%d", ipAddr.Spec.Address, ipAddr.Spec.Prefix)
-			parsedPrefix, err := netip.ParsePrefix(toAdd)
+	var errs []error
+	for _, ipamDeviceConfig := range ipamDeviceConfigs {
+		var addressWithPrefixes []netip.Prefix
+		for _, ipamAddress := range ipamDeviceConfig.IPAMAddresses {
+			addressWithPrefix, err := parseAddressWithPrefix(ipamAddress)
 			if err != nil {
-				msg := fmt.Sprintf("IPAddress %s/%s has invalid ip address: %q",
-					ipAddrKey.Namespace,
-					ipAddrKey.Name,
-					toAdd,
-				)
-				return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
+				errs = append(errs, err)
+				continue
 			}
 
-			if !slices.Contains(ipAddrs, toAdd) {
-				ipAddrs = append(ipAddrs, toAdd)
-
-				gatewayAddr, err := netip.ParseAddr(ipAddr.Spec.Gateway)
-				if err != nil {
-					msg := fmt.Sprintf("IPAddress %s/%s has invalid gateway: %q",
-						ipAddrKey.Namespace,
-						ipAddrKey.Name,
-						ipAddr.Spec.Gateway,
-					)
-					return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-				}
-
-				if parsedPrefix.Addr().Is4() != gatewayAddr.Is4() {
-					msg := fmt.Sprintf("IPAddress %s/%s has mismatched gateway and address IP families",
-						ipAddrKey.Namespace,
-						ipAddrKey.Name,
-					)
-					return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-				}
-
-				if gatewayAddr.Is4() {
-					if device.Gateway4 != "" && device.Gateway4 != ipAddr.Spec.Gateway {
-						msg := fmt.Sprintf("The IPv4 Gateway for IPAddress %s does not match the Gateway4 already configured on device (index %d)",
-							ipAddrName,
-							devIdx,
-						)
-						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-					}
-					if gateway4 != "" && gateway4 != ipAddr.Spec.Gateway {
-						msg := fmt.Sprintf("The IPv4 IPAddresses assigned to the same device (index %d) do not have the same gateway",
-							devIdx,
-						)
-						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-					}
-					gateway4 = ipAddr.Spec.Gateway
-				} else {
-					if device.Gateway6 != "" && device.Gateway6 != ipAddr.Spec.Gateway {
-						msg := fmt.Sprintf("The IPv6 Gateway for IPAddress %s does not match the Gateway6 already configured on device (index %d)",
-							ipAddrName,
-							devIdx,
-						)
-						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-					}
-					if gateway6 != "" && gateway6 != ipAddr.Spec.Gateway {
-						msg := fmt.Sprintf("The IPv6 IPAddresses assigned to the same device (index %d) do not have the same gateway",
-							devIdx,
-						)
-						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
-					}
-					gateway6 = ipAddr.Spec.Gateway
-				}
+			if slices.Contains(addressWithPrefixes, addressWithPrefix) {
+				errs = append(errs,
+					fmt.Errorf("IPAddress %s/%s is a duplicate of another address: %q",
+						ipamAddress.Namespace,
+						ipamAddress.Name,
+						addressWithPrefix))
+				continue
 			}
-			ctx.IPAMState[device.MACAddr] = infrav1.NetworkDeviceSpec{
-				IPAddrs:  ipAddrs,
-				Gateway4: gateway4,
-				Gateway6: gateway6,
+
+			gatewayAddr, err := parseGateway(ipamAddress, addressWithPrefix, ipamDeviceConfig)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+
+			if gatewayAddr.Is4() {
+				ipamDeviceConfig.IPAMConfigGateway4 = ipamAddress.Spec.Gateway
+			} else {
+				ipamDeviceConfig.IPAMConfigGateway6 = ipamAddress.Spec.Gateway
+			}
+
+			addressWithPrefixes = append(addressWithPrefixes, addressWithPrefix)
+		}
+
+		if len(addressWithPrefixes) > 0 {
+			ctx.IPAMState[ipamDeviceConfig.MACAddress] = infrav1.NetworkDeviceSpec{
+				IPAddrs:  prefixesAsStrings(addressWithPrefixes),
+				Gateway4: ipamDeviceConfig.IPAMConfigGateway4,
+				Gateway6: ipamDeviceConfig.IPAMConfigGateway6,
 			}
 		}
+	}
+
+	if len(errs) > 0 {
+		var msgs []string
+		for _, err := range errs {
+			msgs = append(msgs, err.Error())
+		}
+		msg := strings.Join(msgs, "\n")
+		conditions.MarkFalse(ctx.VSphereVM,
+			infrav1.IPAddressClaimedCondition,
+			infrav1.IPAddressInvalidReason,
+			clusterv1.ConditionSeverityError,
+			msg)
+		return false, errors.New(msg)
 	}
 
 	if len(ctx.IPAMState) > 0 {
@@ -439,6 +407,173 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 	}
 
 	return true, nil
+}
+
+// prefixesAsStrings converts []netip.Prefix to []string.
+func prefixesAsStrings(prefixes []netip.Prefix) []string {
+	prefixSrings := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefixSrings = append(prefixSrings, prefix.String())
+	}
+	return prefixSrings
+}
+
+// parseAddressWithPrefix converts a *ipamv1.IPAddress to a string, e.g. '10.0.0.1/24'.
+func parseAddressWithPrefix(ipamAddress *ipamv1.IPAddress) (netip.Prefix, error) {
+	addressWithPrefix := fmt.Sprintf("%s/%d", ipamAddress.Spec.Address, ipamAddress.Spec.Prefix)
+	parsedPrefix, err := netip.ParsePrefix(addressWithPrefix)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("IPAddress %s/%s has invalid ip address: %q",
+			ipamAddress.Namespace,
+			ipamAddress.Name,
+			addressWithPrefix,
+		)
+	}
+
+	return parsedPrefix, nil
+}
+
+// parseGateway parses the gateway address on a ipamv1.IPAddress and ensures it
+// does not conflict with the gateway addresses parsed from other
+// ipamv1.IPAddresses on the current device. Gateway addresses must be the same
+// family as the address on the ipamv1.IPAddress. Gateway addresses of one
+// family must match the other addresses of the same family.
+func parseGateway(ipamAddress *ipamv1.IPAddress, addressWithPrefix netip.Prefix, ipamDeviceConfig ipamDeviceConfig) (netip.Addr, error) {
+	gatewayAddr, err := netip.ParseAddr(ipamAddress.Spec.Gateway)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("IPAddress %s/%s has invalid gateway: %q",
+			ipamAddress.Namespace,
+			ipamAddress.Name,
+			ipamAddress.Spec.Gateway,
+		)
+	}
+
+	if addressWithPrefix.Addr().Is4() != gatewayAddr.Is4() {
+		return netip.Addr{}, fmt.Errorf("IPAddress %s/%s has mismatched gateway and address IP families",
+			ipamAddress.Namespace,
+			ipamAddress.Name,
+		)
+	}
+
+	if gatewayAddr.Is4() {
+		if areGatewaysMismatched(ipamDeviceConfig.NetworkSpecGateway4, ipamAddress.Spec.Gateway) {
+			return netip.Addr{}, fmt.Errorf("the IPv4 Gateway for IPAddress %s does not match the Gateway4 already configured on device (index %d)",
+				ipamAddress.Name,
+				ipamDeviceConfig.DeviceIndex,
+			)
+		}
+		if areGatewaysMismatched(ipamDeviceConfig.IPAMConfigGateway4, ipamAddress.Spec.Gateway) {
+			return netip.Addr{}, fmt.Errorf("the IPv4 IPAddresses assigned to the same device (index %d) do not have the same gateway",
+				ipamDeviceConfig.DeviceIndex,
+			)
+		}
+	} else {
+		if areGatewaysMismatched(ipamDeviceConfig.NetworkSpecGateway6, ipamAddress.Spec.Gateway) {
+			return netip.Addr{}, fmt.Errorf("the IPv6 Gateway for IPAddress %s does not match the Gateway6 already configured on device (index %d)",
+				ipamAddress.Name,
+				ipamDeviceConfig.DeviceIndex,
+			)
+		}
+		if areGatewaysMismatched(ipamDeviceConfig.IPAMConfigGateway6, ipamAddress.Spec.Gateway) {
+			return netip.Addr{}, fmt.Errorf("the IPv6 IPAddresses assigned to the same device (index %d) do not have the same gateway",
+				ipamDeviceConfig.DeviceIndex,
+			)
+		}
+	}
+
+	return gatewayAddr, nil
+}
+
+// buildIPAMDeviceConfigs checks that all the IPAddressClaims have been
+// satisfied.
+// If each IPAddressClaim has an associated IPAddress, a slice of
+// ipamDeviceConfig is returned, one for each device with addressesFromPools.
+// If any of the IPAddressClaims do not have an associated IPAddress yet,
+// a false condition is set and an error is returned, effectively stopping the
+// current reconcilliation loop.
+func buildIPAMDeviceConfigs(ctx *virtualMachineContext) ([]ipamDeviceConfig, error) {
+	boundClaims := 0
+	totalClaims := 0
+	ipamDeviceConfigs := []ipamDeviceConfig{}
+	for devIdx, networkSpecDevice := range ctx.VSphereVM.Spec.Network.Devices {
+		ipamDeviceConfig := ipamDeviceConfig{
+			IPAMAddresses:       []*ipamv1.IPAddress{},
+			MACAddress:          networkSpecDevice.MACAddr,
+			NetworkSpecGateway4: networkSpecDevice.Gateway4,
+			NetworkSpecGateway6: networkSpecDevice.Gateway6,
+			DeviceIndex:         devIdx,
+		}
+
+		for poolRefIdx := range networkSpecDevice.AddressesFromPools {
+			totalClaims++
+
+			ipAddrClaimName := IPAddressClaimName(ctx.VSphereVM.Name, ipamDeviceConfig.DeviceIndex, poolRefIdx)
+
+			ipAddrClaim, err := getIPAddrClaim(&ctx.VMContext, ipAddrClaimName)
+			if err != nil {
+				ctx.Logger.Error(err, "error fetching IPAddressClaim", "name", ipAddrClaimName)
+				if apierrors.IsNotFound(err) {
+					// it would be odd for this to occur, a findorcreate just happened in a previous step
+					continue
+				}
+				return nil, err
+			}
+
+			ctx.Logger.V(5).Info("fetched IPAddressClaim", "name", ipAddrClaimName, "namespace", ctx.VSphereVM.Namespace)
+
+			ipAddrName := ipAddrClaim.Status.AddressRef.Name
+			if ipAddrName == "" {
+				ctx.Logger.V(5).Info("IPAddress not yet bound to IPAddressClaim", "name", ipAddrClaimName, "namespace", ctx.VSphereVM.Namespace)
+				continue
+			}
+
+			ipAddr := &ipamv1.IPAddress{}
+			ipAddrKey := apitypes.NamespacedName{
+				Namespace: ctx.VSphereVM.Namespace,
+				Name:      ipAddrName,
+			}
+
+			if err := ctx.Client.Get(ctx, ipAddrKey, ipAddr); err != nil {
+				// because the ref was set on the claim, it is expected this error should not occur
+				return nil, err
+			}
+
+			ipamDeviceConfig.IPAMAddresses = append(ipamDeviceConfig.IPAMAddresses, ipAddr)
+			boundClaims++
+		}
+		ipamDeviceConfigs = append(ipamDeviceConfigs, ipamDeviceConfig)
+	}
+
+	if boundClaims < totalClaims {
+		msg := fmt.Sprintf("Waiting for IPAddressClaim to have an IPAddress bound, %d out of %d bound", boundClaims, totalClaims)
+		markIPAddressClaimedConditionWaitingForClaimAddress(ctx.VSphereVM, msg)
+		return nil, errors.New(msg)
+	}
+
+	return ipamDeviceConfigs, nil
+}
+
+// areGatewaysMismatched checks that a gateway for a device is equal to an
+// IPAddresses gateway. We can assume that IPAddresses will always have
+// gateways so we do not need to check for empty string. It is possible to
+// configure a device and not a gateway, we don't want to fail in that case.
+func areGatewaysMismatched(deviceGateway, ipAddressGateway string) bool {
+	return deviceGateway != "" && deviceGateway != ipAddressGateway
+}
+
+// getIPAddrClaim fetches an IPAddressClaim from the api with the given name.
+func getIPAddrClaim(ctx *context.VMContext, ipAddrClaimName string) (*ipamv1.IPAddressClaim, error) {
+	ipAddrClaim := &ipamv1.IPAddressClaim{}
+	ipAddrClaimKey := apitypes.NamespacedName{
+		Namespace: ctx.VSphereVM.Namespace,
+		Name:      ipAddrClaimName,
+	}
+
+	ctx.Logger.V(5).Info("fetching IPAddressClaim", "name", ipAddrClaimKey.String())
+	if err := ctx.Client.Get(ctx, ipAddrClaimKey, ipAddrClaim); err != nil {
+		return nil, err
+	}
+	return ipAddrClaim, nil
 }
 
 func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error) {
@@ -584,28 +719,65 @@ func (vms *VMService) reconcileUUID(ctx *virtualMachineContext) {
 	ctx.State.BiosUUID = ctx.Obj.UUID(ctx)
 }
 
-func (vms *VMService) reconcileHardwareVersion(ctx *virtualMachineContext) error {
-	if ctx.VSphereVM.Spec.HardwareVersion == "" {
-		return nil
-	}
-
-	var virtualMachine mo.VirtualMachine
-	if err := ctx.Obj.Properties(ctx, ctx.Obj.Reference(), []string{"config.version"}, &virtualMachine); err != nil {
-		return errors.Wrapf(err, "error getting guestInfo version information from VM %s", ctx.VSphereVM.Name)
-	}
-	toUpgrade, err := util.LessThan(virtualMachine.Config.Version, ctx.VSphereVM.Spec.HardwareVersion)
-	if err != nil {
-		return errors.Wrapf(err, "failed to parse hardware version")
-	}
-	if toUpgrade {
-		ctx.Logger.Info("upgrading hardware version",
-			"from", virtualMachine.Config.Version,
-			"to", ctx.VSphereVM.Spec.HardwareVersion)
-		task, err := ctx.Obj.UpgradeVM(ctx, ctx.VSphereVM.Spec.HardwareVersion)
-		if err != nil {
-			return errors.Wrapf(err, "error trigging upgrade op for machine %s", ctx)
+func (vms *VMService) reconcileHardwareVersion(ctx *virtualMachineContext) (bool, error) {
+	if ctx.VSphereVM.Spec.HardwareVersion != "" {
+		var virtualMachine mo.VirtualMachine
+		if err := ctx.Obj.Properties(ctx, ctx.Obj.Reference(), []string{"config.version"}, &virtualMachine); err != nil {
+			return false, errors.Wrapf(err, "error getting guestInfo version information from VM %s", ctx.VSphereVM.Name)
 		}
-		ctx.VSphereVM.Status.TaskRef = task.Reference().Value
+		toUpgrade, err := util.LessThan(virtualMachine.Config.Version, ctx.VSphereVM.Spec.HardwareVersion)
+		if err != nil {
+			return false, errors.Wrapf(err, "failed to parse hardware version")
+		}
+		if toUpgrade {
+			ctx.Logger.Info("upgrading hardware version",
+				"from", virtualMachine.Config.Version,
+				"to", ctx.VSphereVM.Spec.HardwareVersion)
+			task, err := ctx.Obj.UpgradeVM(ctx, ctx.VSphereVM.Spec.HardwareVersion)
+			if err != nil {
+				return false, errors.Wrapf(err, "error trigging upgrade op for machine %s", ctx)
+			}
+			ctx.VSphereVM.Status.TaskRef = task.Reference().Value
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (vms *VMService) reconcilePCIDevices(ctx *virtualMachineContext) error {
+	if expectedPciDevices := ctx.VSphereVM.Spec.VirtualMachineCloneSpec.PciDevices; len(expectedPciDevices) != 0 {
+		specsToBeAdded, err := pci.CalculateDevicesToBeAdded(ctx, ctx.Obj, expectedPciDevices)
+		if err != nil {
+			return err
+		}
+
+		if len(specsToBeAdded) == 0 {
+			if conditions.Has(ctx.VSphereVM, infrav1.PCIDevicesDetachedCondition) {
+				conditions.Delete(ctx.VSphereVM, infrav1.PCIDevicesDetachedCondition)
+			}
+			ctx.Logger.V(5).Info("no new PCI devices to be added")
+			return nil
+		}
+
+		powerState, err := ctx.Obj.PowerState(ctx)
+		if err != nil {
+			return err
+		}
+		if powerState == types.VirtualMachinePowerStatePoweredOn {
+			// This would arise only when the PCI device is manually removed from
+			// the VM post creation.
+			ctx.Logger.Info("PCI device cannot be attached in powered on state")
+			conditions.MarkFalse(ctx.VSphereVM,
+				infrav1.PCIDevicesDetachedCondition,
+				infrav1.NotFoundReason,
+				clusterv1.ConditionSeverityWarning,
+				"PCI devices removed after VM was powered on")
+			return errors.Errorf("missing PCI devices")
+		}
+		ctx.Logger.Info("PCI devices to be added", "number", len(specsToBeAdded))
+		if err := ctx.Obj.AddDevice(ctx, pci.ConstructDeviceSpecs(specsToBeAdded)...); err != nil {
+			return errors.Wrapf(err, "error adding pci devices for %q", ctx)
+		}
 	}
 	return nil
 }
@@ -803,15 +975,6 @@ func (vms *VMService) reconcileClusterModuleMembership(ctx *virtualMachineContex
 		ctx.VSphereVM.Status.ModuleUUID = ctx.ClusterModuleInfo
 	}
 	return nil
-}
-
-func markIPAddressClaimedConditionInvalidIPWithError(vm *infrav1.VSphereVM, msg string) (bool, error) {
-	conditions.MarkFalse(vm,
-		infrav1.IPAddressClaimedCondition,
-		infrav1.IPAddressInvalidReason,
-		clusterv1.ConditionSeverityError,
-		msg)
-	return false, errors.New(msg)
 }
 
 func markIPAddressClaimedConditionWaitingForClaimAddress(vm *infrav1.VSphereVM, msg string) {
